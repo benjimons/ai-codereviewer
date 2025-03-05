@@ -114,7 +114,7 @@ async function getLLaMAResponse(prompt: string): Promise<Array<{
   reviewComment: string;
 }> | null> {
   try {
-    // Format request for Databricks API
+    // Format request for Databricks API using the messages format
     const response = await fetch(DATABRICKS_ENDPOINT_URL, {
       method: "POST",
       headers: {
@@ -122,11 +122,15 @@ async function getLLaMAResponse(prompt: string): Promise<Array<{
         "Authorization": `Bearer ${DATABRICKS_API_TOKEN}`,
       },
       body: JSON.stringify({
-        prompt: prompt,
-        temperature: 0.2,
+        messages: [
+          {
+            role: "user",
+            content: prompt
+          }
+        ],
         max_tokens: 1000,
+        temperature: 0.2,
         top_p: 1.0,
-        stop: ["\n</s>"],
       }),
     });
 
@@ -136,9 +140,15 @@ async function getLLaMAResponse(prompt: string): Promise<Array<{
 
     const data = await response.json();
     
-    // For LLaMA models, the response structure might be different from OpenAI
-    // Adjust this according to your Databricks endpoint's response format
-    let responseText = data.output || data.choices?.[0]?.text || data.generated_text || "";
+    // Get the response text from the assistant's message
+    let responseText = "";
+    if (data.choices && data.choices.length > 0 && data.choices[0].message) {
+      responseText = data.choices[0].message.content;
+    } else if (data.candidates && data.candidates.length > 0) {
+      responseText = data.candidates[0].content || data.candidates[0].text || "";
+    } else {
+      responseText = data.output || data.generated_text || "";
+    }
     
     // Extract the JSON from the generated text
     // The model might return the JSON with some additional text
