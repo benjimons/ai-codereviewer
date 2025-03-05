@@ -1,19 +1,15 @@
 import { readFileSync } from "fs";
 import * as core from "@actions/core";
-import OpenAI from "openai";
 import { Octokit } from "@octokit/rest";
 import parseDiff, { Chunk, File } from "parse-diff";
 import minimatch from "minimatch";
+import fetch from "node-fetch";
 
 const GITHUB_TOKEN: string = core.getInput("GITHUB_TOKEN");
-const OPENAI_API_KEY: string = core.getInput("OPENAI_API_KEY");
-const OPENAI_API_MODEL: string = core.getInput("OPENAI_API_MODEL");
+const DATABRICKS_API_TOKEN: string = core.getInput("DATABRICKS_API_TOKEN");
+const DATABRICKS_ENDPOINT_URL: string = core.getInput("DATABRICKS_ENDPOINT_URL");
 
 const octokit = new Octokit({ auth: GITHUB_TOKEN });
-
-const openai = new OpenAI({
-  apiKey: OPENAI_API_KEY,
-});
 
 interface PRDetails {
   owner: string;
@@ -66,7 +62,7 @@ async function analyzeCode(
     if (file.to === "/dev/null") continue; // Ignore deleted files
     for (const chunk of file.chunks) {
       const prompt = createPrompt(file, chunk, prDetails);
-      const aiResponse = await getAIResponse(prompt);
+      const aiResponse = await getLLaMAResponse(prompt);
       if (aiResponse) {
         const newComments = createComment(file, chunk, aiResponse);
         if (newComments) {
@@ -79,8 +75,11 @@ async function analyzeCode(
 }
 
 function createPrompt(file: File, chunk: Chunk, prDetails: PRDetails): string {
-  return `Your task is to review pull requests. Instructions:
-- Provide the response in following JSON format:  {"reviews": [{"lineNumber":  <line_number>, "reviewComment": "<review comment>"}]}
+  return `<s>[INST]
+Your task is to review a pull request. 
+
+Follow these instructions:
+- Provide the response in following JSON format: {"reviews": [{"lineNumber": <line_number>, "reviewComment": "<review comment>"}]}
 - Do not give positive comments or compliments.
 - Provide comments and suggestions ONLY if there is something to improve, otherwise "reviews" should be an empty array.
 - Write the comment in GitHub Markdown format.
@@ -107,41 +106,60 @@ ${chunk.changes
   .map((c) => `${c.ln ? c.ln : c.ln2} ${c.content}`)
   .join("\n")}
 \`\`\`
-`;
+[/INST]</s>`;
 }
 
-async function getAIResponse(prompt: string): Promise<Array<{
+async function getLLaMAResponse(prompt: string): Promise<Array<{
   lineNumber: string;
   reviewComment: string;
 }> | null> {
-  const queryConfig = {
-    model: OPENAI_API_MODEL,
-    temperature: 0.2,
-    max_tokens: 700,
-    top_p: 1,
-    frequency_penalty: 0,
-    presence_penalty: 0,
-  };
-
   try {
-    const response = await openai.chat.completions.create({
-      ...queryConfig,
-      // return JSON if the model supports it:
-      ...(OPENAI_API_MODEL === "gpt-4-1106-preview"
-        ? { response_format: { type: "json_object" } }
-        : {}),
-      messages: [
-        {
-          role: "system",
-          content: prompt,
-        },
-      ],
+    // Format request for Databricks API
+    const response = await fetch(DATABRICKS_ENDPOINT_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${DATABRICKS_API_TOKEN}`,
+      },
+      body: JSON.stringify({
+        prompt: prompt,
+        temperature: 0.2,
+        max_tokens: 1000,
+        top_p: 1.0,
+        stop: ["\n</s>"],
+      }),
     });
 
-    const res = response.choices[0].message?.content?.trim() || "{}";
-    return JSON.parse(res).reviews;
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const data = await response.json();
+    
+    // For LLaMA models, the response structure might be different from OpenAI
+    // Adjust this according to your Databricks endpoint's response format
+    let responseText = data.output || data.choices?.[0]?.text || data.generated_text || "";
+    
+    // Extract the JSON from the generated text
+    // The model might return the JSON with some additional text
+    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+    
+    if (jsonMatch) {
+      try {
+        const parsedJson = JSON.parse(jsonMatch[0]);
+        return parsedJson.reviews || [];
+      } catch (e) {
+        console.error("Failed to parse JSON from model response:", e);
+        console.log("Raw response:", responseText);
+        return null;
+      }
+    } else {
+      console.error("No valid JSON found in the response");
+      console.log("Raw response:", responseText);
+      return null;
+    }
   } catch (error) {
-    console.error("Error:", error);
+    console.error("Error calling LLaMA API:", error);
     return null;
   }
 }
