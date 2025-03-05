@@ -1,16 +1,15 @@
-name: "AI Code Review Action"
-description: "Perform code reviews and comment on diffs using OpenAI API."
+name: "LLaMA Code Review Action"
+description: "Perform code reviews and comment on diffs using Databricks LLaMA 3.3 70B."
 inputs:
   GITHUB_TOKEN:
     description: "GitHub token to interact with the repository."
     required: true
-  OPENAI_API_KEY:
-    description: "OpenAI API key for GPT."
+  DATABRICKS_API_TOKEN:
+    description: "Databricks API token for authentication."
     required: true
-  OPENAI_API_MODEL:
-    description: "OpenAI API model."
-    required: false
-    default: "gpt-4"
+  DATABRICKS_ENDPOINT_URL:
+    description: "Databricks endpoint URL for the LLaMA 3.3 70B model."
+    required: true
   exclude:
     description: "Glob patterns to exclude files from the diff analysis"
     required: false
@@ -19,5 +18,5 @@ runs:
   using: "node16"
   main: "dist/index.js"
 branding:
-  icon: "aperture"
-  color: "green"
+  icon: "cpu"
+  color: "blue"
